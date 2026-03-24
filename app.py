@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
+import io
 
-st.set_page_config(page_title="Audit Pro - Multi-Box Dashboard", layout="wide")
+st.set_page_config(page_title="Audit Pro - Final Report", layout="wide")
 
 # 1. Initialize Memory
 if 'scan_list' not in st.session_state:
@@ -9,9 +10,9 @@ if 'scan_list' not in st.session_state:
 if 'active_box' not in st.session_state:
     st.session_state.active_box = 1
 
-st.title("📊 Inventory Audit (Sum Logic + Separate Excess)")
+st.title("📊 Inventory Audit & Excel Reporter")
 
-# 2. Sidebar
+# 2. Sidebar & File Upload
 st.sidebar.header("📁 Data Sources")
 sys_file = st.sidebar.file_uploader("Upload System Sheet", type=["xlsx"])
 mst_file = st.sidebar.file_uploader("Upload Master Sheet", type=["xlsx"])
@@ -21,7 +22,7 @@ if st.sidebar.button("🗑️ Reset Audit"):
     st.session_state.active_box = 1
     st.rerun()
 
-# 3. Load Data & Build Logic
+# 3. Load Data & Build Maps
 all_sys_serials = set()
 sys_id_map = {}
 sys_info_map = {}
@@ -31,41 +32,30 @@ if sys_file and mst_file:
     try:
         df_sys = pd.read_excel(sys_file)
         df_mst = pd.read_excel(mst_file)
-        
         df_sys.columns = df_sys.columns.str.strip()
         df_mst.columns = df_mst.columns.str.strip()
 
-        # Mapping System (Product=Index 2, Serial=Index 5, EAN=Index 15, Van=Index 3)
         for _, row in df_sys.iterrows():
-            name = str(row.iloc[2]).strip()
-            van = str(row.iloc[3]).strip()
-            serial = str(row.iloc[5]).strip()
-            cat = str(row.iloc[12]).strip()
-            ean = str(row.iloc[15]).strip()
-            
-            sys_info_map[name] = {"Van": van, "Cat": cat}
+            name, van, serial, ean = str(row.iloc[2]).strip(), str(row.iloc[3]).strip(), str(row.iloc[5]).strip(), str(row.iloc[15]).strip()
+            sys_info_map[name] = {"Van": van, "Cat": str(row.iloc[12]).strip()}
             if serial != 'nan' and serial != "": 
                 all_sys_serials.add(serial)
                 sys_id_map[serial] = name
-            if van != 'nan' and van != "": sys_id_map[van] = name
-            if ean != 'nan' and ean != "": sys_id_map[ean] = name
+            if van != 'nan': sys_id_map[van] = name
+            if ean != 'nan': sys_id_map[ean] = name
 
-        # Mapping Master
         for _, row in df_mst.iterrows():
-            m_van, m_ean1, m_ean2, m_name = str(row.iloc[0]), str(row.iloc[1]), str(row.iloc[2]), str(row.iloc[3])
+            m_van, m_name = str(row.iloc[0]), str(row.iloc[3])
             m_data = {"name": m_name, "cat": str(row.iloc[6]), "van": m_van}
-            for k in [m_van, m_ean1, m_ean2]:
-                if k != 'nan' and k != "": mst_id_map[k] = m_data
-
+            for k in [m_van, str(row.iloc[1]), str(row.iloc[2])]:
+                if k != 'nan': mst_id_map[k] = m_data
     except Exception as e:
         st.error(f"Setup Error: {e}")
 
-# 4. Strict Scan Function
+# 4. Scanning Logic
 def handle_scan(val):
     val = str(val).strip()
     if not val: return
-    
-    # RULE: Serial (Col F) blocked after 1st scan. Others allowed.
     if val in all_sys_serials and val in st.session_state.scan_list:
         st.error(f"❌ SERIAL ALREADY SCANNED: {val}")
     else:
@@ -73,7 +63,6 @@ def handle_scan(val):
         st.session_state.active_box = 2 if st.session_state.active_box == 1 else 1
         st.rerun()
 
-# --- Input Area ---
 c1, c2 = st.columns(2)
 with c1:
     if st.session_state.active_box == 1:
@@ -84,9 +73,9 @@ with c2:
         b2 = st.text_input("👇 SCAN BOX 2", key="in2")
         if b2: handle_scan(b2)
 
-# 5. Dashboard & Sum-Linked Calculations
+# 5. Dashboard & Export
 if sys_file and mst_file:
-    # A. Process Log
+    # Build Logs
     scan_log = []
     scanned_ser_only = []
     for code in st.session_state.scan_list:
@@ -96,13 +85,11 @@ if sys_file and mst_file:
             if is_ser: scanned_ser_only.append(code)
             scan_log.append({"Product Name": name, "Serial No.": is_ser, "Type": "In System"})
         elif code in mst_id_map:
-            scan_log.append({"Product Name": mst_id_map[code]["name"], "Serial No.": "Barcode", "Type": "Excess Out of Stock"})
+            scan_log.append({"Product Name": mst_id_map[code]["name"], "Serial No.": "Barcode", "Type": "Out of Stock"})
         else:
             scan_log.append({"Product Name": f"Unknown: {code}", "Serial No.": "", "Type": "Unknown"})
 
     df_log = pd.DataFrame(scan_log)
-
-    # B. Calculations
     phys_qty = df_log.groupby('Product Name').size().reset_index(name='Scanned Qty')
     sys_qty = df_sys.groupby(df_sys.columns[2])[df_sys.columns[7]].sum().reset_index()
     sys_qty.columns = ['Product Name', 'System Qty']
@@ -110,32 +97,46 @@ if sys_file and mst_file:
     audit = pd.merge(sys_qty, phys_qty, on='Product Name', how='outer').fillna(0)
     audit['Difference'] = audit['Scanned Qty'] - audit['System Qty']
 
-    def calculate_status(row):
-        if row['System Qty'] > 0 and row['Scanned Qty'] == 0: return "Short"
+    def get_status(row):
         if row['Difference'] < 0: return "Short"
         if row['Difference'] > 0 and row['System Qty'] > 0: return "Excess"
         if row['Difference'] > 0 and row['System Qty'] == 0: return "Excess Out of Stock"
-        if row['Difference'] == 0: return "Tally"
-        return "Unknown"
+        return "Tally"
+    audit['Status'] = audit.apply(get_status, axis=1)
 
-    audit['Status'] = audit.apply(calculate_status, axis=1)
+    # Sidebar Export Tool
+    st.sidebar.divider()
+    st.sidebar.header("📥 Export Audit")
+    
+    # Prep Missing Serials
+    missing_list = [s for s in all_sys_serials if s not in scanned_ser_only]
+    df_missing = pd.DataFrame(missing_list, columns=["Serial Numbers NOT Found"])
 
-    # C. 5-Box Dashboard Metrics
-    st.divider()
+    # Excel Buffer
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+        audit.to_excel(writer, sheet_name='Audit_Summary', index=False)
+        df_log.to_excel(writer, sheet_name='Every_Scan_Log', index=False)
+        df_missing.to_excel(writer, sheet_name='Missing_Serials', index=False)
+    
+    st.sidebar.download_button(
+        label="💾 Download Excel Report",
+        data=buffer.getvalue(),
+        file_name="Inventory_Audit_Report.xlsx",
+        mime="application/vnd.ms-excel"
+    )
+
+    # UI Metrics
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("System Stock (Sum)", int(audit['System Qty'].sum()))
-    m2.metric("Total Scanned", len(st.session_state.scan_list))
+    m1.metric("Sys Stock", int(audit['System Qty'].sum()))
+    m2.metric("Scanned", len(st.session_state.scan_list))
     m3.metric("Short Units", int(abs(audit[audit['Difference'] < 0]['Difference'].sum())))
-    m4.metric("Excess (In-Stock)", int(audit[(audit['Difference'] > 0) & (audit['System Qty'] > 0)]['Difference'].sum()))
-    m5.metric("Excess (Out-of-Stock)", int(audit[audit['Status'] == "Excess Out of Stock"]['Scanned Qty'].sum()))
+    m4.metric("Excess (In)", int(audit[(audit['Difference'] > 0) & (audit['System Qty'] > 0)]['Difference'].sum()))
+    m5.metric("Excess (Out)", int(audit[audit['Status'] == "Excess Out of Stock"]['Scanned Qty'].sum()))
 
-    # D. Tables
-    t1, t2 = st.tabs(["📋 Main Stock Audit", "🔍 Serial Number Detail"])
-    with t1:
-        st.dataframe(audit[['Status', 'Product Name', 'System Qty', 'Scanned Qty', 'Difference']], use_container_width=True)
+    t1, t2 = st.tabs(["📋 Audit Summary", "🔍 Serial Tracking"])
+    with t1: st.dataframe(audit, use_container_width=True)
     with t2:
-        st.dataframe(df_log[['Product Name', 'Serial No.', 'Type']], use_container_width=True)
-        missing = [s for s in all_sys_serials if s not in scanned_ser_only]
-        if missing:
-            with st.expander("🚨 VIEW MISSING SERIAL NUMBERS"):
-                st.table(pd.DataFrame(missing, columns=["Serial Number"]))
+        st.dataframe(df_log, use_container_width=True)
+        if missing_list:
+            with st.expander("🚨 VIEW MISSING SERIALS"): st.table(df_missing)

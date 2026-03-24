@@ -2,98 +2,87 @@ import streamlit as st
 import pandas as pd
 import io
 
-st.set_page_config(page_title="Gun Scanner Audit", layout="wide")
-st.title("🔫 Live Barcode Audit System")
+st.set_page_config(page_title="Custom Inventory Audit", layout="wide")
+st.title("📦 System-First Audit (Gun Scanner Ready)")
 
-# Initialize scan list in memory
+# Initialize session state for scans
 if 'scan_list' not in st.session_state:
     st.session_state.scan_list = []
 
-# Sidebar - Setup & Controls
-st.sidebar.header("1. Setup Data")
+# Sidebar for file uploads
+st.sidebar.header("1. Upload Data")
 sys_file = st.sidebar.file_uploader("Upload System Sheet", type=["xlsx"])
-mst_file = st.sidebar.file_uploader("Upload Master Sheet (Backup)", type=["xlsx"])
+mst_file = st.sidebar.file_uploader("Upload Master Sheet", type=["xlsx"])
 
-if st.sidebar.button("🗑️ Clear All Scans"):
+if st.sidebar.button("🗑️ Clear Scans"):
     st.session_state.scan_list = []
     st.rerun()
 
-# 2. Scanner Input Field
-st.subheader("Ready to Scan")
-# This text input is designed for the Barcode Gun
-current_scan = st.text_input("Scan Barcode Here (Gun Scanner)", key="scanner_input", placeholder="Click here and start scanning...")
+# 2. Scanner Input (Manual or Gun)
+st.subheader("Scan or Type Barcode")
+current_scan = st.text_input("Input Barcode", key="scanner_box", placeholder="Scan here...")
 
 if current_scan:
-    # Add scan to list if not empty
     st.session_state.scan_list.append(str(current_scan).strip())
-    # Clear input for next scan immediately
-    st.empty() 
     st.rerun()
 
-# Display current scan count
-st.write(f"**Total Items Scanned:** {len(st.session_state.scan_list)}")
+st.write(f"**Items Scanned:** {len(st.session_state.scan_list)}")
 
 if sys_file and mst_file:
     try:
-        # Load Data
+        # Load sheets (No headers used, we use indices for accuracy)
         df_sys = pd.read_excel(sys_file)
         df_mst = pd.read_excel(mst_file)
 
-        # Standardize Columns
-        df_sys.columns = df_sys.columns.str.strip()
-        df_mst.columns = df_mst.columns.str.strip()
-
-        # Build Logic Maps
-        # Map 1: System Map (Highest Priority)
+        # Build the System Map (Higher Priority)
+        # C=Name(2), D=Van(3), F=Serial(5), H=Qty(7), M=Cat(12), P=EAN(15)
         sys_map = {}
         for _, row in df_sys.iterrows():
-            name = str(row['Product']).strip()
-            for col in ['ProductEAN', 'Item Number', 'Serial No']:
-                if col in df_sys.columns and pd.notna(row[col]):
-                    sys_map[str(row[col]).strip()] = name
+            name = str(row.iloc[2]).strip() # Column C
+            for idx in [3, 5, 15]: # Columns D, F, P
+                val = str(row.iloc[idx]).strip()
+                if val != 'nan':
+                    sys_map[val] = {"name": name, "cat": str(row.iloc[12])}
 
-        # Map 2: Master Map (Backup for new items)
+        # Build the Master Map (Backup)
         mst_map = {}
         for _, row in df_mst.iterrows():
-            name = str(row['Product Name']).strip()
-            for col in ['EAN No.-2025', 'VAN No.', 'EAN No.-2026']:
-                if col in df_mst.columns and pd.notna(row[col]):
-                    mst_map[str(row[col]).strip()] = name
+            # Adjust these indices if Master Sheet differs
+            name = str(row.iloc[4]).strip() # Product Name
+            for idx in [0, 1, 3]: # VAN No, EAN 2025, EAN 2026
+                val = str(row.iloc[idx]).strip()
+                if val != 'nan':
+                    mst_map[val] = {"name": name, "cat": str(row.iloc[6])}
 
         # Process Scans
-        scan_data = []
-        for barcode in st.session_state.scan_list:
-            if barcode in sys_map:
-                scan_data.append({'Name': sys_map[barcode], 'Source': 'System'})
-            elif barcode in mst_map:
-                scan_data.append({'Name': mst_map[barcode], 'Source': 'Master (Excess)'})
+        found_scans = []
+        for code in st.session_state.scan_list:
+            if code in sys_map:
+                found_scans.append(sys_map[code]['name'])
+            elif code in mst_map:
+                found_scans.append(mst_map[code]['name'])
             else:
-                scan_data.append({'Name': f"Unknown: {barcode}", 'Source': 'Not Found'})
+                found_scans.append(f"NOT FOUND: {code}")
 
-        df_scanned = pd.DataFrame(scan_data)
+        # Summary Math
+        df_phys = pd.Series(found_scans).value_counts().reset_index()
+        df_phys.columns = ['Product Name', 'Physical Count']
 
-        # --- AUDIT CALCULATIONS ---
-        # 1. Summarize Physical Scans
-        phys_counts = df_scanned.groupby('Name').size().reset_index(name='Physical_Qty')
+        # System Quantity Sum (Column C and H)
+        df_sys_qty = df_sys.groupby(df_sys.columns[2])[df_sys.columns[7]].sum().reset_index()
+        df_sys_qty.columns = ['Product Name', 'System Qty']
 
-        # 2. Summarize System Quantity (Sum the 'Quantity' column)
-        sys_counts = df_sys.groupby('Product')['Quantity'].sum().reset_index()
-        sys_counts.columns = ['Name', 'System_Qty']
-
-        # 3. Merge Audit
-        # Outer join ensures items in System show up even if not scanned (Shortage)
-        # And items scanned but not in System show up (Excess)
-        audit = pd.merge(sys_counts, phys_counts, on='Name', how='outer').fillna(0)
+        # Final Merge
+        audit = pd.merge(df_sys_qty, df_phys, on='Product Name', how='outer').fillna(0)
+        audit['Difference'] = audit['Physical Count'] - audit['System Qty']
         
-        audit['Difference'] = audit['Physical_Qty'] - audit['System_Qty']
-        
-        def get_status(diff):
+        def status_check(diff):
             if diff == 0: return "Tally"
             return "Short" if diff < 0 else "Excess"
         
-        audit['Status'] = audit['Difference'].apply(get_status)
+        audit['Status'] = audit['Difference'].apply(status_check)
 
-        # Display Final Table
+        # Display Result
         st.subheader("Audit Report")
         st.dataframe(audit.sort_values('Difference'), use_container_width=True)
 
@@ -101,7 +90,7 @@ if sys_file and mst_file:
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             audit.to_excel(writer, index=False)
-        st.download_button("📥 Download Final Audit Excel", output.getvalue(), "Audit_Report.xlsx")
+        st.download_button("📥 Download Excel Report", output.getvalue(), "Audit_Report.xlsx")
 
     except Exception as e:
-        st.error(f"Error processing files: {e}")
+        st.error(f"Mapping Error: {e}. Check if column counts match.")

@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import io
 
-st.set_page_config(page_title="Audit Pro - complete Report", layout="wide")
+st.set_page_config(page_title="Audit Pro - Multi-Download", layout="wide")
 
 # 1. Initialize Memory
 if 'scan_list' not in st.session_state:
@@ -10,14 +10,14 @@ if 'scan_list' not in st.session_state:
 if 'active_box' not in st.session_state:
     st.session_state.active_box = 1
 
-st.title("📊 Final Inventory Audit & Reporter")
+st.title("📊 Live Inventory Audit System")
 
 # 2. Sidebar & File Upload
-st.sidebar.header("📁 Data Sources")
+st.sidebar.header("1. Setup Data")
 sys_file = st.sidebar.file_uploader("Upload System Sheet", type=["xlsx"])
-mst_file = st.sidebar.file_uploader("Upload Master Sheet", type=["xlsx"])
+mst_file = st.sidebar.file_uploader("Upload Master Sheet (Backup)", type=["xlsx"])
 
-if st.sidebar.button("🗑️ Reset Audit"):
+if st.sidebar.button("🗑️ Clear All Scans"):
     st.session_state.scan_list = []
     st.session_state.active_box = 1
     st.rerun()
@@ -59,9 +59,10 @@ if sys_file and mst_file:
             for k in [m_v, str(row.iloc[1]), str(row.iloc[2])]:
                 if k != 'nan' and k != "": mst_id_map[k] = m_d
     except Exception as e:
-        st.error(f"Setup Error: {e}")
+        st.error(f"Error processing files: {e}")
 
-# 4. Strict Scan Logic
+# 4. Scan Input Area
+st.subheader("Ready to Scan")
 def handle_scan(val):
     val = str(val).strip()
     if not val: return
@@ -72,18 +73,22 @@ def handle_scan(val):
         st.session_state.active_box = 2 if st.session_state.active_box == 1 else 1
         st.rerun()
 
+# Dynamic Input Boxes
 c1, c2 = st.columns(2)
 with c1:
     if st.session_state.active_box == 1:
-        b1 = st.text_input("👇 SCAN BOX 1", key="in1")
+        b1 = st.text_input("Scan Barcode Here (Gun Scanner)", key="in1", placeholder="Box 1 Active...")
         if b1: handle_scan(b1)
 with c2:
     if st.session_state.active_box == 2:
-        b2 = st.text_input("👇 SCAN BOX 2", key="in2")
+        b2 = st.text_input("Scan Barcode Here (Gun Scanner)", key="in2", placeholder="Box 2 Active...")
         if b2: handle_scan(b2)
 
-# 5. Processing and Dashboard
+st.write(f"**Total Items Scanned:** {len(st.session_state.scan_list)}")
+
+# 5. Dashboard & Reports
 if sys_file and mst_file:
+    # Build Scan History
     scan_log = []
     scanned_sers = []
     for code in st.session_state.scan_list:
@@ -99,7 +104,7 @@ if sys_file and mst_file:
 
     df_log = pd.DataFrame(scan_log)
     
-    # Audit Calculations (Summing Col H)
+    # Audit Table Calculations
     phys_qty = df_log.groupby('Product Name').size().reset_index(name='Scanned Qty')
     sys_qty = df_sys.groupby(df_sys.columns[2])[df_sys.columns[7]].sum().reset_index()
     sys_qty.columns = ['Product Name', 'System Qty']
@@ -114,7 +119,7 @@ if sys_file and mst_file:
         return "Tally"
     audit['Status'] = audit.apply(get_status, axis=1)
 
-    # Add Mandatory Columns back
+    # Add Van and Category back for the display and export
     def add_meta(name, field):
         if name in sys_info_map: return sys_info_map[name].get(field, "")
         for v in mst_id_map.values():
@@ -125,39 +130,52 @@ if sys_file and mst_file:
     audit['Category'] = audit['Product Name'].apply(lambda x: add_meta(x, "Cat"))
     audit = audit[['Status', 'Van No.', 'Product Name', 'Category', 'System Qty', 'Scanned Qty', 'Difference']]
 
-    # Missing Serials Logic
-    missing_data = [{"Serial No.": s, "Product Name": p} for s, p in all_sys_serials.items() if s not in scanned_sers]
+    # Prepare Missing Serials List
+    missing_data = []
+    for s, p in all_sys_serials.items():
+        if s not in scanned_sers:
+            missing_data.append({
+                "Serial No.": s, 
+                "Product Name": p,
+                "Van No.": sys_info_map[p]["Van"],
+                "Category": sys_info_map[p]["Cat"]
+            })
     df_missing = pd.DataFrame(missing_data)
 
-    # Sidebar Export
-    st.sidebar.divider()
-    st.sidebar.header("📥 Download Final Report")
+    # --- THE DOWNLOAD BUTTON (ALWAYS VISIBLE) ---
+    st.divider()
+    st.header("🏁 Finish & Download")
+    
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-        audit.to_excel(writer, sheet_name='Audit_Summary', index=False)
-        df_log.to_excel(writer, sheet_name='Scan_History', index=False)
-        df_missing.to_excel(writer, sheet_name='Missing_Serials', index=False)
+        audit.to_excel(writer, sheet_name='Final_Audit_Summary', index=False)
+        df_log.to_excel(writer, sheet_name='Full_Scan_History', index=False)
+        df_missing.to_excel(writer, sheet_name='Missing_Serials_Report', index=False)
     
-    st.sidebar.download_button(
-        label="💾 Download Excel Report",
+    # This button has no limit - you can click it as many times as you want
+    st.download_button(
+        label="📥 CLICK TO DOWNLOAD ALL EXCEL REPORTS",
         data=buffer.getvalue(),
-        file_name="Complete_Audit_Report.xlsx",
-        mime="application/vnd.ms-excel"
+        file_name="Final_Inventory_Audit_Report.xlsx",
+        mime="application/vnd.ms-excel",
+        help="Click here to download the Summary, Scan Log, and Missing Serials in one file."
     )
 
     # Dashboard Metrics
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Sys Stock Sum", int(audit['System Qty'].sum()))
+    m1.metric("System Qty Sum", int(audit['System Qty'].sum()))
     m2.metric("Total Scanned", len(st.session_state.scan_list))
     m3.metric("Short Units", int(abs(audit[audit['Difference'] < 0]['Difference'].sum())))
-    m4.metric("Excess (In)", int(audit[(audit['Difference'] > 0) & (audit['System Qty'] > 0)]['Difference'].sum()))
-    m5.metric("Excess (Out)", int(audit[audit['Status'] == "Excess Out of Stock"]['Scanned Qty'].sum()))
+    m4.metric("Excess (In-Stock)", int(audit[(audit['Difference'] > 0) & (audit['System Qty'] > 0)]['Difference'].sum()))
+    m5.metric("Excess (Out-of-Stock)", int(audit[audit['Status'] == "Excess Out of Stock"]['Scanned Qty'].sum()))
 
-    # Tables
-    t1, t2 = st.tabs(["📋 Main Stock Audit", "🔍 Serial Tracking Detail"])
-    with t1: st.dataframe(audit, use_container_width=True)
-    with t2:
+    # Detailed Tabs
+    tab1, tab2 = st.tabs(["📋 Main Stock Audit", "🔍 Serial Tracking & Missing"])
+    with tab1:
+        st.dataframe(audit, use_container_width=True)
+    with tab2:
+        st.write("### Every Scan Log")
         st.dataframe(df_log, use_container_width=True)
         if not df_missing.empty:
-            with st.expander("🚨 VIEW MISSING SERIALS"):
-                st.table(df_missing)
+            st.write("### 🚨 Missing Serials (Not Scanned)")
+            st.dataframe(df_missing, use_container_width=True)

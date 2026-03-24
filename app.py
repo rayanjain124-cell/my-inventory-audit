@@ -2,7 +2,12 @@ import streamlit as st
 import pandas as pd
 import io
 
-st.set_page_config(page_title="Audit Pro - Multi-Download", layout="wide")
+# Page Config
+st.set_page_config(page_title="Audit Pro - Rayan Jain", layout="wide")
+
+# --- SIGNATURE HEADER ---
+st.markdown("<h3 style='text-align: right; color: #5D3FD3;'>Designed by: RAYAN JAIN</h3>", unsafe_allow_html=True)
+st.divider()
 
 # 1. Initialize Memory
 if 'scan_list' not in st.session_state:
@@ -119,7 +124,7 @@ if sys_file and mst_file:
         return "Tally"
     audit['Status'] = audit.apply(get_status, axis=1)
 
-    # Add Van and Category back for the display and export
+    # Add Van and Category back
     def add_meta(name, field):
         if name in sys_info_map: return sys_info_map[name].get(field, "")
         for v in mst_id_map.values():
@@ -142,7 +147,7 @@ if sys_file and mst_file:
             })
     df_missing = pd.DataFrame(missing_data)
 
-    # --- THE DOWNLOAD BUTTON (ALWAYS VISIBLE) ---
+    # --- THE DOWNLOAD BUTTON ---
     st.divider()
     st.header("🏁 Finish & Download")
     
@@ -152,13 +157,11 @@ if sys_file and mst_file:
         df_log.to_excel(writer, sheet_name='Full_Scan_History', index=False)
         df_missing.to_excel(writer, sheet_name='Missing_Serials_Report', index=False)
     
-    # This button has no limit - you can click it as many times as you want
     st.download_button(
         label="📥 CLICK TO DOWNLOAD ALL EXCEL REPORTS",
         data=buffer.getvalue(),
-        file_name="Final_Inventory_Audit_Report.xlsx",
-        mime="application/vnd.ms-excel",
-        help="Click here to download the Summary, Scan Log, and Missing Serials in one file."
+        file_name=f"Audit_Report_by_Rayan_Jain.xlsx",
+        mime="application/vnd.ms-excel"
     )
 
     # Dashboard Metrics

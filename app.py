@@ -55,33 +55,33 @@ if user_role == "Host (Admin)":
     
     saved_admin_key = config.get("admin_key")
 
-    # STEP 1: If no admin exists, create one first
+    # Only show Admin setup if no key exists
     if not saved_admin_key:
-        st.subheader("Create Admin Account")
-        new_key = st.text_input("Set your Master Admin Password", type="password")
-        if st.button("Initialize Admin"):
+        st.subheader("Initial Admin Setup")
+        new_key = st.text_input("Create Master Admin Password", type="password")
+        if st.button("Save Admin Password"):
             if new_key:
                 config["admin_key"] = new_key
                 with open(CONFIG_FILE, 'w') as f: json.dump(config, f)
-                st.success("Admin created! Now enter password to unlock.")
+                st.success("Admin Password Created! Please login below.")
                 st.rerun()
     else:
-        # STEP 2: Login to unlock Host tools
-        h_input = st.text_input("Enter Admin Password to Unlock Panel", type="password")
+        # Password check to unlock Admin features
+        h_input = st.text_input("Enter Admin Password to Unlock", type="password")
         if st.button("Unlock Admin Panel"):
             if h_input == saved_admin_key: 
                 st.session_state.is_host = True
                 st.success("Access Granted")
             else: 
-                st.error("Wrong Password")
+                st.error("Access Denied")
 
-    # STEP 3: Only show Reset and Setup after Password is Correct
+    # SECURE ADMIN AREA: Only visible if password is correct
     if st.session_state.get('is_host'):
         st.sidebar.markdown("---")
-        st.sidebar.subheader("🔒 Secure Admin Tools")
+        st.sidebar.subheader("🔒 Admin Controls")
         
-        # RESET OPTION IS NOW HIDDEN HERE (ONLY ACCESSIBLE AFTER PASSWORD)
-        if st.sidebar.button("🚨 Emergency Full Reset"):
+        # RESET IS NOW TOTALLY HIDDEN HERE
+        if st.sidebar.button("🚨 EMERGENCY FULL RESET"):
             for f in [DATA_FILE, CONFIG_FILE, EXCESS_FILE]:
                 if os.path.exists(f): os.remove(f)
             st.session_state.clear()
@@ -128,7 +128,7 @@ if user_role == "Host (Admin)":
 # ---------------- AUDITOR SECTION ----------------
 else:
     st.header("Auditor Station")
-    # Reset button is NEVER visible here
+    # Reset button is physically impossible to access from this role
     if not os.path.exists(DATA_FILE):
         st.warning("Audit session not active.")
     else:
@@ -151,17 +151,17 @@ else:
             if sel_brand != "All": view_df = view_df[view_df['Brand'] == sel_brand]
             
             st.subheader(f"Missing Items for {sel_brand}")
-            st.dataframe(view_df[['Item No.', 'Serial No', 'Product', 'Brand']], use_container_width=True)
+            # Updated to match 2026 streamlit syntax
+            st.dataframe(view_df[['Item No.', 'Serial No', 'Product', 'Brand']], width="stretch")
 
             tab1, tab2 = st.tabs(["⌨️ Keyboard/Gun", "📷 Camera"])
             code = ""
             with tab1: code = st.text_input("Scan Here", key="man_input")
             with tab2: 
                 if HAS_SCANNER:
-                    cam_side = st.radio("Camera Direction", ["Back (Environment)", "Front (User)"], horizontal=True)
-                    facing = "environment" if "Back" in cam_side else "user"
                     st.write("Point camera at barcode")
-                    code = camera_input_live(facing=facing, show_controls=False)
+                    # Fixed: Removed 'facing' argument that caused TypeError
+                    code = camera_input_live(show_controls=True)
                 else:
                     st.error("Camera scanner disabled.")
 

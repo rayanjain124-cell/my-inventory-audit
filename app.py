@@ -55,24 +55,32 @@ if user_role == "Host (Admin)":
     
     saved_admin_key = config.get("admin_key")
 
+    # STEP 1: If no admin exists, create one first
     if not saved_admin_key:
-        st.subheader("Initial Setup")
-        new_key = st.text_input("Create Admin Password", type="password")
-        if st.button("Save Password"):
+        st.subheader("Create Admin Account")
+        new_key = st.text_input("Set your Master Admin Password", type="password")
+        if st.button("Initialize Admin"):
             if new_key:
                 config["admin_key"] = new_key
                 with open(CONFIG_FILE, 'w') as f: json.dump(config, f)
+                st.success("Admin created! Now enter password to unlock.")
                 st.rerun()
     else:
-        h_input = st.text_input("Enter Admin Password", type="password")
+        # STEP 2: Login to unlock Host tools
+        h_input = st.text_input("Enter Admin Password to Unlock Panel", type="password")
         if st.button("Unlock Admin Panel"):
-            if h_input == saved_admin_key: st.session_state.is_host = True
-            else: st.error("Wrong Password")
+            if h_input == saved_admin_key: 
+                st.session_state.is_host = True
+                st.success("Access Granted")
+            else: 
+                st.error("Wrong Password")
 
+    # STEP 3: Only show Reset and Setup after Password is Correct
     if st.session_state.get('is_host'):
-        # --- PROTECTED EMERGENCY RESET ---
         st.sidebar.markdown("---")
-        st.sidebar.subheader("Admin Tools")
+        st.sidebar.subheader("🔒 Secure Admin Tools")
+        
+        # RESET OPTION IS NOW HIDDEN HERE (ONLY ACCESSIBLE AFTER PASSWORD)
         if st.sidebar.button("🚨 Emergency Full Reset"):
             for f in [DATA_FILE, CONFIG_FILE, EXCESS_FILE]:
                 if os.path.exists(f): os.remove(f)
@@ -120,6 +128,7 @@ if user_role == "Host (Admin)":
 # ---------------- AUDITOR SECTION ----------------
 else:
     st.header("Auditor Station")
+    # Reset button is NEVER visible here
     if not os.path.exists(DATA_FILE):
         st.warning("Audit session not active.")
     else:

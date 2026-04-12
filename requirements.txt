@@ -1,4 +1,6 @@
-streamlit-barcode-reader
-xlsxwriter
+streamlit
 pandas
+xlsxwriter
 openpyxl
+streamlit-camera-input-live
+pillow

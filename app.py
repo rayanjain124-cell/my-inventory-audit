@@ -40,14 +40,8 @@ def load_data(file=DATA_FILE):
             return pd.DataFrame()
     return pd.DataFrame()
 
-# --- SIDEBAR ---
-st.sidebar.title("System Control")
-if st.sidebar.button("🚨 Emergency Full Reset"):
-    for f in [DATA_FILE, CONFIG_FILE, EXCESS_FILE]:
-        if os.path.exists(f): os.remove(f)
-    st.session_state.clear()
-    st.rerun()
-
+# --- SIDEBAR ROLE SELECTION ---
+st.sidebar.title("Navigation")
 user_role = st.sidebar.radio("Your Role", ["Host (Admin)", "Auditor (Scanner)"])
 
 # ---------------- HOST SECTION ----------------
@@ -76,6 +70,15 @@ if user_role == "Host (Admin)":
             else: st.error("Wrong Password")
 
     if st.session_state.get('is_host'):
+        # --- PROTECTED EMERGENCY RESET ---
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("Admin Tools")
+        if st.sidebar.button("🚨 Emergency Full Reset"):
+            for f in [DATA_FILE, CONFIG_FILE, EXCESS_FILE]:
+                if os.path.exists(f): os.remove(f)
+            st.session_state.clear()
+            st.rerun()
+
         if not os.path.exists(DATA_FILE):
             st.subheader("Setup New Session")
             session_code = st.text_input("Auditor Session Code", "1234")
@@ -146,10 +149,8 @@ else:
             with tab1: code = st.text_input("Scan Here", key="man_input")
             with tab2: 
                 if HAS_SCANNER:
-                    # Added Camera Toggle for Back Camera
                     cam_side = st.radio("Camera Direction", ["Back (Environment)", "Front (User)"], horizontal=True)
                     facing = "environment" if "Back" in cam_side else "user"
-                    
                     st.write("Point camera at barcode")
                     code = camera_input_live(facing=facing, show_controls=False)
                 else:

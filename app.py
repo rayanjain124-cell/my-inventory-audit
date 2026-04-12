@@ -19,6 +19,7 @@ st.sidebar.title("System Menu")
 if st.sidebar.button("🚨 Emergency Full Reset"):
     if os.path.exists(DATA_FILE): os.remove(DATA_FILE)
     if os.path.exists(CONFIG_FILE): os.remove(CONFIG_FILE)
+    st.session_state.clear()
     st.rerun()
 
 user_role = st.sidebar.radio("Select Role", ["Host (Admin)", "Auditor (Scanner)"])
@@ -27,60 +28,64 @@ user_role = st.sidebar.radio("Select Role", ["Host (Admin)", "Auditor (Scanner)"
 if user_role == "Host (Admin)":
     st.header("Host Administration")
     
-    # Login with Go Button
-    h_input = st.text_input("Enter Host Code", type="password", help="Use your permanent emergency code")
-    if st.button("Open Host Panel ➔"):
+    # Use Master Key to unlock the "Creation" area
+    h_input = st.text_input("Enter Master Host Code to Unlock", type="password")
+    if st.button("Unlock Admin Panel ➔"):
         if h_input == MASTER_KEY:
             st.session_state.is_host = True
-            st.success("Access Granted!")
+            st.success("Admin Panel Unlocked")
         else:
-            st.error("Invalid Code")
+            st.error("Invalid Master Code")
 
     if st.session_state.get('is_host'):
         if not os.path.exists(DATA_FILE):
-            st.subheader("1. Initialize New Audit")
+            st.subheader("1. Create Fresh Audit Session")
             
-            # Audit Mode
+            # Here you create the code for THIS specific audit
+            new_session_code = st.text_input("Create a Fresh Code for this Audit", "1234")
             mode = st.selectbox("Audit Type", ["Serial Only", "Non-Serial Only", "Mixed"])
             
-            # Auditor Code Setup
-            a_code = st.text_input("Create Code for Auditors", "9999")
+            # File Uploads
+            file_main = st.file_uploader("Upload Main Stock (A-P)", type=['xlsx', 'csv'])
+            file_transfer = st.file_uploader("Upload Transfer Sheet (Optional)", type=['xlsx', 'csv'])
             
-            # File Upload
-            file = st.file_uploader("Upload Main Stock (A-P)", type=['xlsx', 'csv'])
-            
-            if file:
-                # Load data immediately to extract categories from Column M (Index 12)
-                df_temp = pd.read_csv(file) if file.name.endswith('csv') else pd.read_excel(file)
+            if file_main:
+                df_temp = pd.read_csv(file_main) if file_main.name.endswith('csv') else pd.read_excel(file_main)
                 
-                # Column M is typically index 12. Adjusting for standard A-P sheet:
-                # If Column M is 'Product Category', we find unique values.
-                cat_col = 'Product Category' if 'Product Category' in df_temp.columns else df_temp.columns[12]
+                # Column M (Index 12) for Category Filtering
+                cat_col = df_temp.columns[12] if len(df_temp.columns) > 12 else df_temp.columns[-1]
                 all_categories = df_temp[cat_col].unique().tolist()
-                
-                selected_cats = st.multiselect("Select Product Categories for today's Audit (Column M)", all_categories, default=all_categories)
+                selected_cats = st.multiselect(f"Select Categories from {cat_col}", all_categories, default=all_categories)
                 
                 if st.button("Start Audit Session 🚀"):
-                    # Filter data by selected categories
                     df_final = df_temp[df_temp[cat_col].isin(selected_cats)].copy()
                     df_final['Audit_Status'] = "Pending"
-                    df_final['Scan_Count'] = 0
+                    df_final['Scanned_By'] = ""
+                    
+                    # Store Transfer Data separately if uploaded
+                    if file_transfer:
+                        df_t = pd.read_csv(file_transfer) if file_transfer.name.endswith('csv') else pd.read_excel(file_transfer)
+                        df_t.to_csv("transfer_state.csv", index=False)
                     
                     save_data(df_final)
                     with open(CONFIG_FILE, 'w') as f:
-                        json.dump({"mode": mode, "code": a_code, "categories": selected_cats}, f)
-                    st.success("Audit is LIVE with selected categories.")
+                        json.dump({"mode": mode, "session_key": new_session_code, "categories": selected_cats}, f)
+                    st.success("Session Created! You can now use your fresh code.")
                     st.rerun()
         else:
             # Active Session Management
             st.subheader("Manage Active Session")
             data = load_data()
-            st.write(f"Items in current Audit: {len(data)}")
+            
+            # Log in to active session
+            with open(CONFIG_FILE, 'r') as f: config = json.load(f)
+            st.info(f"Active Session Code: {config['session_key']}")
             
             st.download_button("📥 Download Final Report", data.to_csv(index=False).encode('utf-8'), "Audit_Report.csv")
             
             if st.button("🔥 Wipe & Close Audit"):
                 if os.path.exists(DATA_FILE): os.remove(DATA_FILE)
+                if os.path.exists("transfer_state.csv"): os.remove("transfer_state.csv")
                 st.session_state.is_host = False
                 st.rerun()
 
@@ -88,39 +93,41 @@ if user_role == "Host (Admin)":
 else:
     st.header("Scanning Station")
     if not os.path.exists(CONFIG_FILE):
-        st.warning("No active audit. Wait for Host to initialize.")
+        st.warning("No active audit found. Wait for Host.")
     else:
         with open(CONFIG_FILE, 'r') as f: config = json.load(f)
         
-        a_input = st.text_input("Enter Auditor Code", type="password")
-        if st.button("Enter Scanner Portal ➔"):
-            st.session_state.is_auditor = (a_input == config['code'])
+        # Auditor uses the FRESH code created by the host
+        a_name = st.text_input("Scanner Name")
+        a_code = st.text_input("Enter Session Code", type="password")
+        
+        if st.button("Start Scanning ➔"):
+            if a_name and a_code == config['session_key']:
+                st.session_state.auditor_name = a_name
+                st.session_state.is_auditor = True
+            else:
+                st.error("Invalid Name or Session Code")
 
         if st.session_state.get('is_auditor'):
+            st.info(f"Scanning as: {st.session_state.auditor_name}")
             df_audit = load_data()
-            st.info(f"Audit Categories: {', '.join(config['categories'])}")
             
-            # Auto-submit logic for Gun Scanners
-            scan = st.text_input("Scan / Type Item (Press Enter)", key="auditor_scan")
-            
+            scan = st.text_input("Scan / Type Item (Press Enter)")
             if scan:
-                # Duplicate Check
-                dup = df_audit[(df_audit['Serial No'].astype(str) == scan) & (df_audit['Audit_Status'] == "✅ Scanned")]
-                if not dup.empty:
-                    st.error(f"⚠️ DUPLICATE: {scan} already scanned!")
-                else:
-                    # Match on Serial (Col F/H) or Item Number (Col D)
-                    match = df_audit[(df_audit['Serial No'].astype(str) == scan) | (df_audit['Item Number'].astype(str) == scan)]
-                    
-                    if not match.empty:
-                        idx = match.index[0]
+                # Search logic
+                match = df_audit[(df_audit['Serial No'].astype(str) == scan) | (df_audit['Item Number'].astype(str) == scan)]
+                
+                if not match.empty:
+                    idx = match.index[0]
+                    if df_audit.at[idx, 'Audit_Status'] == "✅ Scanned":
+                        st.error(f"⚠️ DUPLICATE: Already scanned by {df_audit.at[idx, 'Scanned_By']}")
+                    else:
                         st.success(f"MATCH: {df_audit.at[idx, 'Product']}")
                         df_audit.at[idx, 'Audit_Status'] = "✅ Scanned"
-                        df_audit.at[idx, 'Scan_Count'] += 1
+                        df_audit.at[idx, 'Scanned_By'] = st.session_state.auditor_name
                         save_data(df_audit)
                         st.toast("Saved!")
-                    else:
-                        st.error("❌ NOT IN STOCK (EXCESS)")
+                else:
+                    st.error("❌ NOT IN STOCK (EXCESS)")
             
-            st.divider()
-            st.dataframe(df_audit[['Product', 'Bin', 'Serial No', 'Audit_Status']], use_container_width=True)
+            st.dataframe(df_audit[['Product', 'Bin', 'Serial No', 'Audit_Status', 'Scanned_By']])

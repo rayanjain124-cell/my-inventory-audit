@@ -40,7 +40,7 @@ def load_data(file=DATA_FILE):
             return pd.DataFrame()
     return pd.DataFrame()
 
-# --- SIDEBAR ROLE SELECTION ---
+# --- SIDEBAR ---
 st.sidebar.title("Navigation")
 user_role = st.sidebar.radio("Your Role", ["Host (Admin)", "Auditor (Scanner)"])
 
@@ -73,7 +73,9 @@ if user_role == "Host (Admin)":
 
     if st.session_state.get('is_host'):
         st.sidebar.markdown("---")
-        st.sidebar.subheader("🔒 Admin Controls")
+        st.sidebar.subheader("🔒 Secure Admin Tools")
+        
+        # RESET IS ONLY VISIBLE HERE AFTER PASSWORD
         if st.sidebar.button("🚨 EMERGENCY FULL RESET"):
             for f in [DATA_FILE, CONFIG_FILE, EXCESS_FILE]:
                 if os.path.exists(f): os.remove(f)
@@ -84,29 +86,41 @@ if user_role == "Host (Admin)":
             st.subheader("Setup New Session")
             session_code = st.text_input("Auditor Session Code", "1234")
             file_main = st.file_uploader("Upload Master Stock", type=['xlsx', 'csv'])
-            if file_main and st.button("Launch Audit Session 🚀"):
+            
+            if file_main:
                 df_raw = pd.read_csv(file_main) if file_main.name.endswith('csv') else pd.read_excel(file_main)
-                df_main = df_raw.copy()
-                df_main['Item No.'] = df_raw.iloc[:, 3]
-                df_main['Brand'] = df_raw.iloc[:, 8]
-                df_main['Category'] = df_raw.iloc[:, 12]
+                df_prep = df_raw.copy()
                 
-                df_main['Audit_Status'] = "Pending"
-                df_main['Scanned_By'] = ""
-                df_main['Matched_On'] = ""
-                save_data(df_main)
-                save_data(pd.DataFrame(columns=df_main.columns), EXCESS_FILE)
-                config["session_key"] = session_code
-                with open(CONFIG_FILE, 'w') as f: json.dump(config, f)
-                st.rerun()
+                # Column mapping based on index
+                df_prep['Item No.'] = df_raw.iloc[:, 3]
+                df_prep['Brand'] = df_raw.iloc[:, 8]
+                df_prep['Category'] = df_raw.iloc[:, 12]
+                
+                # CATEGORY SELECTION RESTORED
+                unique_cats = sorted(df_prep['Category'].dropna().unique().tolist())
+                selected_cats = st.multiselect("Select Categories to Audit", unique_cats)
+                
+                if st.button("Launch Audit Session 🚀"):
+                    if selected_cats and session_code:
+                        df_filtered = df_prep[df_prep['Category'].isin(selected_cats)].copy()
+                        df_filtered['Audit_Status'] = "Pending"
+                        df_filtered['Scanned_By'] = ""
+                        df_filtered['Matched_On'] = ""
+                        save_data(df_filtered)
+                        save_data(pd.DataFrame(columns=df_filtered.columns), EXCESS_FILE)
+                        config["session_key"] = session_code
+                        with open(CONFIG_FILE, 'w') as f: json.dump(config, f)
+                        st.rerun()
         else:
             df = load_data()
             df_excess = load_data(EXCESS_FILE)
             st.metric("Total Items to Find", len(df[df['Audit_Status'] == "Pending"]))
+            
+            report_cols = ['Product', 'Item No.', 'Brand', 'Category', 'Serial No', 'Scanned_By', 'Matched_On']
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                df[df['Audit_Status'] == "✅ Scanned"].to_excel(writer, sheet_name='Scanned', index=False)
-                df[df['Audit_Status'] == "Pending"].to_excel(writer, sheet_name='Shortages', index=False)
+                df[df['Audit_Status'] == "✅ Scanned"][report_cols].to_excel(writer, sheet_name='Scanned', index=False)
+                df[df['Audit_Status'] == "Pending"][report_cols].to_excel(writer, sheet_name='Shortages', index=False)
                 df_excess.to_excel(writer, sheet_name='Excess', index=False)
             st.download_button("📥 Download Final Detailed Report", buffer.getvalue(), "Audit_Report.xlsx")
 
@@ -118,7 +132,7 @@ else:
     else:
         with open(CONFIG_FILE, 'r') as f: config = json.load(f)
         
-        # Only show login - Hide data completely until successful login
+        # Auditor Login (Hides data until successful)
         if not st.session_state.get('is_auditor'):
             a_name = st.text_input("Your Name")
             a_code = st.text_input("Session Code", type="password")
@@ -128,65 +142,57 @@ else:
                     st.session_state.auditor_name = a_name
                     st.rerun()
                 else:
-                    st.error("Invalid Code or Name")
-        
-        # Data is only loaded and shown AFTER login
+                    st.error("Invalid Details")
         else:
             df_audit = load_data()
             df_excess = load_data(EXCESS_FILE)
 
-            st.write(f"Logged in as: **{st.session_state.auditor_name}**")
+            st.write(f"Auditor: **{st.session_state.auditor_name}**")
             
             unique_brands = sorted(df_audit['Brand'].unique().tolist())
             sel_brand = st.selectbox("Filter Missing Items by Brand:", ["All"] + unique_brands)
-            
             view_df = df_audit[df_audit['Audit_Status'] == "Pending"]
-            if sel_brand != "All": 
-                view_df = view_df[view_df['Brand'] == sel_brand]
+            if sel_brand != "All": view_df = view_df[view_df['Brand'] == sel_brand]
             
-            st.subheader(f"Items to Find ({len(view_df)})")
+            st.subheader(f"Remaining to Find ({len(view_df)})")
             st.dataframe(view_df[['Item No.', 'Serial No', 'Product', 'Brand']], width="stretch")
 
-            tab1, tab2 = st.tabs(["⌨️ Manual/Gun Entry", "📷 Camera Scanner"])
+            tab1, tab2 = st.tabs(["⌨️ Manual Entry", "📷 Camera"])
             scanned_val = ""
             
             with tab1:
-                with st.form("manual_entry", clear_on_submit=True):
-                    scanned_val = st.text_input("Scan/Type Barcode Here")
-                    submit = st.form_submit_button("Submit Scan")
-                    if not submit: scanned_val = ""
+                with st.form("input_form", clear_on_submit=True):
+                    scanned_val = st.text_input("Scan/Type Barcode")
+                    if not st.form_submit_button("Submit"): scanned_val = ""
 
             with tab2: 
                 if HAS_SCANNER:
-                    st.info("Place barcode in front of camera")
                     scanned_val = camera_input_live(show_controls=True)
                 else:
-                    st.error("Camera not supported on this browser.")
+                    st.error("Scanner Disabled")
 
             if scanned_val:
                 val = str(scanned_val).strip().upper()
-                # Search logic
                 m_ser = df_audit[df_audit['Serial No'].astype(str).str.upper() == val]
                 m_item = df_audit[df_audit['Item No.'].astype(str).str.upper() == val]
-                
                 target, m_type = (m_ser, "Serial No") if not m_ser.empty else (m_item, "Item No.") if not m_item.empty else (pd.DataFrame(), "")
 
                 if not target.empty:
                     idx = target.index[0]
                     if df_audit.at[idx, 'Audit_Status'] == "✅ Scanned":
-                        st.warning(f"Item already scanned by {df_audit.at[idx, 'Scanned_By']}")
+                        st.warning(f"Already scanned by {df_audit.at[idx, 'Scanned_By']}")
                     else:
                         df_audit.at[idx, 'Audit_Status'] = "✅ Scanned"
                         df_audit.at[idx, 'Scanned_By'] = st.session_state.auditor_name
                         df_audit.at[idx, 'Matched_On'] = m_type
                         save_data(df_audit)
-                        st.success(f"SUCCESS: Match found on {m_type}!")
+                        st.success(f"Match: {val}")
                         st.rerun()
                 else:
                     if val not in df_excess['Serial No'].values:
                         new_ex = pd.DataFrame([{"Product": "Excess", "Serial No": val, "Scanned_By": st.session_state.auditor_name, "Audit_Status": "EXCESS"}])
                         df_excess = pd.concat([df_excess, new_ex], ignore_index=True)
                         save_data(df_excess, EXCESS_FILE)
-                        st.error(f"EXCESS: Barcode {val} not in master list. Logged to Excess.")
+                        st.error(f"Excess Logged: {val}")
                     else:
-                        st.info("Excess item already logged.")
+                        st.warning("Already in Excess list.")
